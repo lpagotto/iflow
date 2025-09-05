@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+requests
+python-dotenv
+reportlab
+pydantic
+pydantic-settings
+boto3
+python-multipart
