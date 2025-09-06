@@ -1,3 +1,8 @@
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi import Form
+from starlette.responses import RedirectResponse
+
 from fastapi import FastAPI, Depends, HTTPException, Request, Query
 from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.orm import Session
@@ -16,6 +21,9 @@ from .processing import process_audio_bytes
 from .report import build_pdf_bytes
 
 app = FastAPI(title="UroFlux MVP")
+
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+templates = Jinja2Templates(directory="app/templates")
 
 # cria tabelas no startup
 @app.on_event("startup")
@@ -162,3 +170,99 @@ def handle_audio_message(db: Session, from_whatsapp: str, media_id: str, meta_me
         db.commit()
         send_text(from_whatsapp, "Houve um problema ao processar seu exame. Tente novamente mais tarde.")
         raise
+
+# -------------------------
+# PÁGINAS HTML (médico)
+# -------------------------
+
+# Home -> redireciona para pacientes
+@app.get("/")
+def home():
+    return RedirectResponse(url="/web/patients")
+
+# Lista de pacientes + busca
+@app.get("/web/patients")
+def web_patients(request: Request, q: str | None = None, db: Session = Depends(get_db)):
+    qry = db.query(Patient)
+    if q:
+        like = f"%{q}%"
+        qry = qry.filter(
+            (Patient.name.ilike(like)) |
+            (Patient.cpf.ilike(like)) |
+            (Patient.whatsapp.ilike(like))
+        )
+    patients = qry.order_by(Patient.id.desc()).limit(200).all()
+    return templates.TemplateResponse(
+        "patients_list.html",
+        {"request": request, "patients": patients, "q": q or ""}
+    )
+
+# Criar paciente (form GET/POST)
+@app.get("/web/patients/new")
+def web_new_patient(request: Request):
+    return templates.TemplateResponse("patient_detail.html", {
+        "request": request,
+        "patient": None,
+        "exams": [],
+        "creating": True
+    })
+
+@app.post("/web/patients/new")
+def web_create_patient(
+    request: Request,
+    name: str = Form(...),
+    cpf: str = Form(...),
+    whatsapp: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    # reuso do endpoint API
+    existing = db.query(Patient).filter(
+        (Patient.cpf == cpf) | (Patient.whatsapp == whatsapp)
+    ).first()
+    if existing:
+        # simples: volta com erro em querystring
+        return RedirectResponse(url=f"/web/patients?error=duplicado", status_code=303)
+
+    p = Patient(name=name, cpf=cpf, whatsapp=whatsapp)
+    db.add(p); db.commit(); db.refresh(p)
+    return RedirectResponse(url=f"/web/patients/{p.id}", status_code=303)
+
+# Detalhe do paciente + exames
+@app.get("/web/patients/{patient_id}")
+def web_patient_detail(request: Request, patient_id: int, db: Session = Depends(get_db)):
+    p = db.query(Patient).get(patient_id)
+    if not p:
+        return RedirectResponse(url="/web/patients", status_code=303)
+    exams = db.query(Exam).filter(Exam.patient_id == patient_id).order_by(Exam.id.desc()).all()
+    return templates.TemplateResponse("patient_detail.html", {
+        "request": request,
+        "patient": p,
+        "exams": exams,
+        "creating": False
+    })
+
+# Enviar instruções por WhatsApp (botão na UI)
+@app.post("/web/patients/{patient_id}/send-instructions")
+def web_send_instructions(patient_id: int, db: Session = Depends(get_db)):
+    p = db.query(Patient).get(patient_id)
+    if not p:
+        return RedirectResponse(url="/web/patients", status_code=303)
+    # usa a função já existente
+    try:
+        send_template_message(
+            to_whatsapp=p.whatsapp,
+            template_name="uroflux_instrucoes_audio",
+            lang="pt_BR"
+        )
+    except Exception:
+        pass
+    return RedirectResponse(url=f"/web/patients/{patient_id}", status_code=303)
+
+# Lista de exames (opcional)
+@app.get("/web/exams")
+def web_exams(request: Request, db: Session = Depends(get_db)):
+    exams = db.query(Exam).order_by(Exam.id.desc()).limit(200).all()
+    return templates.TemplateResponse("exams_list.html", {
+        "request": request,
+        "exams": exams
+})
