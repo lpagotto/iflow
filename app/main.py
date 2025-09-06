@@ -20,7 +20,26 @@ from .storage import upload_bytes
 from .processing import process_audio_bytes
 from .report import build_pdf_bytes
 
+import os
+from fastapi import FastAPI
+from .db import engine
+from sqlalchemy import text
+
 app = FastAPI(title="UroFlux MVP")
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+@app.on_event("startup")
+def startup_check():
+    # Checa DB sem travar a app se falhar (loga o erro para os logs do Railway)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as e:
+        # Não derruba a app; loga para debug. Se preferir, raise para falhar hard.
+        print(f"[startup] WARNING: DB check falhou: {e}")
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
