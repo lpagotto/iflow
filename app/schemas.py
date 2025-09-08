@@ -1,4 +1,5 @@
-from pydantic import BaseModel, Field
+# app/schemas.py
+from pydantic import BaseModel
 
 class PatientCreate(BaseModel):
     name: str
@@ -10,14 +11,5 @@ class PatientOut(BaseModel):
     name: str
     cpf: str
     whatsapp: str
-    class Config:
-        from_attributes = True
-
-class ExamOut(BaseModel):
-    id: int
-    patient_id: int
-    status: str
-    audio_url: str | None = None
-    pdf_url: str | None = None
     class Config:
         from_attributes = True
