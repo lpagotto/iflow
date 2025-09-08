@@ -1,15 +1,26 @@
+# app/db.py
 import os
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # ex: postgres://user:pass@host:port/dbname
+DATABASE_URL = os.getenv("DATABASE_URL")  # no Railway: já vem setado
 
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL não configurado no Railway.")
+# --- Base declarativa (SQLAlchemy 2.0) ---
+class Base(DeclarativeBase):
+    pass
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# --- Engine & Session ---
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+    future=True,
+)
 
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+# --- Dependency do FastAPI ---
 def get_db():
     db = SessionLocal()
     try:
