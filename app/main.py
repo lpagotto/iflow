@@ -1,20 +1,18 @@
 # app/main.py
 from fastapi import FastAPI, Depends, HTTPException, Request, Query, Form
-from fastapi.responses import PlainTextResponse, JSONResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.responses import RedirectResponse
 
-from typing import Optional, List
-from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy import text
+from typing import Optional, List
 
 from .db import Base, engine, get_db
+from .models import Patient, Exam  # <- AQUI
+from .schemas import PatientCreate, PatientOut, ExamOut
 from .settings import settings
-
-# IMPORTANTe: importe SEMPRE os modelos pela mesma rota
-from .models import Patient, Exam  # <— você removeu entities; use models
-
-# WhatsApp / Storage / Processamento / PDF
 from .whatsapp import (
     send_template_message, send_text, send_document,
     get_media_url, download_media
@@ -23,34 +21,24 @@ from .storage import upload_bytes
 from .processing import process_audio_bytes
 from .report import build_pdf_bytes
 
+import os
+
 app = FastAPI(title="UroFlux MVP")
 
-# --- arquivos estáticos e templates ---
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-templates = Jinja2Templates(directory="app/templates")
-
-# --- healthchecks ---
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-# --- startup: cheque DB e garanta tabelas uma única vez ---
 @app.on_event("startup")
 def on_startup():
+    # cria tabelas (MVP)
+    Base.metadata.create_all(bind=engine)
+    # sanity-check de conexão
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception as e:
         print(f"[startup] WARNING: DB check falhou: {e}")
 
-    # registra modelos no metadata e cria tabelas
-    # (como importamos .models acima, já está tudo no Base.metadata)
-    print("[startup] Tabelas no metadata:", list(Base.metadata.tables.keys()))
-    Base.metadata.create_all(bind=engine)
+# static e templates
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+templates = Jinja2Templates(directory="app/templates")
 
 # =======================
 #   PACIENTES
