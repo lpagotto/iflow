@@ -1,24 +1,36 @@
 # app/models.py
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
-from datetime import datetime
 from .db import Base
+from datetime import datetime
 
 class Patient(Base):
     __tablename__ = "patients"
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    cpf = Column(String, unique=True, index=True, nullable=False)
-    whatsapp = Column(String, index=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    name = Column(String(255), nullable=False)
+    cpf = Column(String(14), unique=True, index=True, nullable=False)
+    whatsapp = Column(String(32), index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    exams = relationship("Exam", back_populates="patient")
 
 class Exam(Base):
     __tablename__ = "exams"
     id = Column(Integer, primary_key=True, index=True)
-    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
-    status = Column(String, default="pending", index=True)
-    audio_s3_key = Column(String, nullable=True)    # onde o áudio foi salvo
-    pdf_s3_key = Column(String, nullable=True)      # laudo PDF
-    created_at = Column(DateTime, default=datetime.utcnow)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
+    audio_url = Column(Text, nullable=True)
+    status = Column(String(32), default="received", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    patient = relationship("Patient")
+    patient = relationship("Patient", back_populates="exams")
+    result = relationship("ExamResult", back_populates="exam", uselist=False)
+
+class ExamResult(Base):
+    __tablename__ = "exam_results"
+    id = Column(Integer, primary_key=True, index=True)
+    exam_id = Column(Integer, ForeignKey("exams.id"), unique=True, nullable=False)
+    summary = Column(Text, nullable=True)
+    pdf_url = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    exam = relationship("Exam", back_populates="result")
