@@ -1,11 +1,9 @@
 fastapi
 uvicorn[standard]
-sqlalchemy
+SQLAlchemy>=2.0
 psycopg2-binary
-requests
-python-dotenv
-reportlab
 pydantic
-pydantic-settings
+python-dotenv
 boto3
-python-multipart
+requests
+reportlab
