@@ -22,7 +22,12 @@ from .report import build_pdf_bytes
 
 import os
 from fastapi import FastAPI
-from .db import engine
+from .db import Base, engine
+from . import models  # importa para registrar as classes no metadata
+
+# cria tabelas no arranque (MVP). Depois você pode migrar p/ Alembic.
+Base.metadata.create_all(bind=engine)
+
 from sqlalchemy import text
 
 app = FastAPI(title="UroFlux MVP")
