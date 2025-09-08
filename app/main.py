@@ -1,17 +1,20 @@
+# app/main.py
+from fastapi import FastAPI, Depends, HTTPException, Request, Query, Form
+from fastapi.responses import PlainTextResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi import Form
-from starlette.responses import RedirectResponse
 
-from fastapi import FastAPI, Depends, HTTPException, Request, Query
-from fastapi.responses import PlainTextResponse, JSONResponse
-from sqlalchemy.orm import Session
 from typing import Optional, List
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from .db import Base, engine, get_db
-from .entities import Patient, Exam
-from .schemas import PatientCreate, PatientOut, ExamOut
 from .settings import settings
+
+# IMPORTANTe: importe SEMPRE os modelos pela mesma rota
+from .models import Patient, Exam  # <— você removeu entities; use models
+
+# WhatsApp / Storage / Processamento / PDF
 from .whatsapp import (
     send_template_message, send_text, send_document,
     get_media_url, download_media
@@ -20,50 +23,47 @@ from .storage import upload_bytes
 from .processing import process_audio_bytes
 from .report import build_pdf_bytes
 
-import os
-from fastapi import FastAPI
-from .db import Base, engine
-from . import models  # importa para registrar as classes no metadata
-
-# cria tabelas no arranque (MVP). Depois você pode migrar p/ Alembic.
-Base.metadata.create_all(bind=engine)
-
-from sqlalchemy import text
-
 app = FastAPI(title="UroFlux MVP")
 
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
-@app.on_event("startup")
-def startup_check():
-    # Checa DB sem travar a app se falhar (loga o erro para os logs do Railway)
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-    except Exception as e:
-        # Não derruba a app; loga para debug. Se preferir, raise para falhar hard.
-        print(f"[startup] WARNING: DB check falhou: {e}")
-
+# --- arquivos estáticos e templates ---
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
-# cria tabelas no startup
-@app.on_event("startup")
-def on_startup():
-    Base.metadata.create_all(bind=engine)
+# --- healthchecks ---
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-# --------- Pacientes ---------
+# --- startup: cheque DB e garanta tabelas uma única vez ---
+@app.on_event("startup")
+def on_startup():
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as e:
+        print(f"[startup] WARNING: DB check falhou: {e}")
+
+    # registra modelos no metadata e cria tabelas
+    # (como importamos .models acima, já está tudo no Base.metadata)
+    print("[startup] Tabelas no metadata:", list(Base.metadata.tables.keys()))
+    Base.metadata.create_all(bind=engine)
+
+# =======================
+#   PACIENTES
+# =======================
+from .schemas import PatientCreate, PatientOut, ExamOut  # schemas aqui embaixo p/ clareza
+
 @app.post("/patients", response_model=PatientOut)
 def create_patient(p: PatientCreate, db: Session = Depends(get_db)):
-    existing = db.query(Patient).filter(
-        (Patient.cpf == p.cpf) | (Patient.whatsapp == p.whatsapp)
-    ).first()
+    existing = (
+        db.query(Patient)
+          .filter((Patient.cpf == p.cpf) | (Patient.whatsapp == p.whatsapp))
+          .first()
+    )
     if existing:
         raise HTTPException(400, "CPF ou WhatsApp já cadastrado.")
     obj = Patient(name=p.name, cpf=p.cpf, whatsapp=p.whatsapp)
@@ -75,17 +75,23 @@ def list_patients(q: Optional[str] = Query(None), db: Session = Depends(get_db))
     qry = db.query(Patient)
     if q:
         like = f"%{q}%"
-        qry = qry.filter((Patient.name.ilike(like)) | (Patient.cpf.ilike(like)) | (Patient.whatsapp.ilike(like)))
+        qry = qry.filter(
+            (Patient.name.ilike(like)) |
+            (Patient.cpf.ilike(like)) |
+            (Patient.whatsapp.ilike(like))
+        )
     return qry.order_by(Patient.id.desc()).limit(100).all()
 
 @app.get("/patients/{patient_id}", response_model=PatientOut)
 def get_patient(patient_id: int, db: Session = Depends(get_db)):
-    obj = db.query(Patient).get(patient_id)
+    obj = db.get(Patient, patient_id)  # SQLAlchemy 2.x
     if not obj:
         raise HTTPException(404, "Paciente não encontrado.")
     return obj
 
-# --------- Exams ----------
+# =======================
+#   EXAMES
+# =======================
 @app.get("/exams", response_model=List[ExamOut])
 def list_exams(patient_id: Optional[int] = None, db: Session = Depends(get_db)):
     qry = db.query(Exam)
@@ -95,18 +101,19 @@ def list_exams(patient_id: Optional[int] = None, db: Session = Depends(get_db)):
 
 @app.get("/exams/{exam_id}", response_model=ExamOut)
 def get_exam(exam_id: int, db: Session = Depends(get_db)):
-    obj = db.query(Exam).get(exam_id)
+    obj = db.get(Exam, exam_id)
     if not obj:
         raise HTTPException(404, "Exame não encontrado.")
     return obj
 
-# --------- Enviar instruções via WhatsApp ----------
+# =======================
+#   WhatsApp
+# =======================
 @app.post("/send-instructions/{patient_id}")
 def send_instructions(patient_id: int, db: Session = Depends(get_db)):
-    p = db.query(Patient).get(patient_id)
+    p = db.get(Patient, patient_id)
     if not p:
         raise HTTPException(404, "Paciente não encontrado.")
-    # use um template aprovado no Cloud API
     try:
         send_template_message(
             to_whatsapp=p.whatsapp,
@@ -117,7 +124,6 @@ def send_instructions(patient_id: int, db: Session = Depends(get_db)):
         raise HTTPException(500, f"Falha ao enviar WhatsApp: {e}")
     return {"ok": True}
 
-# --------- Webhook do WhatsApp ----------
 # Verificação do webhook (GET)
 @app.get("/webhook/meta", response_class=PlainTextResponse)
 def verify_webhook(request: Request):
@@ -139,72 +145,70 @@ def receive_webhook(payload: dict, db: Session = Depends(get_db)):
                 value = change.get("value", {})
                 messages = value.get("messages", [])
                 for msg in messages:
-                    msg_id = msg.get("id")
                     from_wa = msg.get("from")  # número do paciente
                     _type = msg.get("type")
 
                     if _type == "audio":
                         media_id = msg.get("audio", {}).get("id")
+                        msg_id = msg.get("id")
                         handle_audio_message(db, from_wa, media_id, msg_id)
                     else:
-                        # Responder pedindo áudio
                         send_text(from_wa, "Por favor, envie uma mensagem de *áudio* para realizar o exame.")
         return {"ok": True}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-def handle_audio_message(db: Session, from_whatsapp: str, media_id: str, meta_message_id: str):
-    # achar paciente pelo whatsapp
+def handle_audio_message(db: Session, from_whatsapp: str, media_id: str, meta_message_id: str | None):
+    # 1) localizar paciente
     patient = db.query(Patient).filter(Patient.whatsapp == from_whatsapp).first()
     if not patient:
-        # opcional: responder
         send_text(from_whatsapp, "Não encontrei seu cadastro. Peça ao seu médico para cadastrá-lo.")
         return
 
-    # criar exam como "processing"
-    exam = Exam(patient_id=patient.id, status="processing", meta_message_id=meta_message_id)
+    # 2) criar exame como "processing"
+    # ATENÇÃO: seu modelo Exam não tem 'meta_message_id' no momento.
+    # Se desejar persistir, adicione a coluna no modelo + migre o banco.
+    exam = Exam(patient_id=patient.id, status="processing")
     db.add(exam); db.commit(); db.refresh(exam)
 
-    # baixar áudio da Meta
+    # 3) baixar áudio da Meta
     media_url = get_media_url(media_id)
     audio_bytes = download_media(media_url)
 
-    # (opcional) subir áudio bruto em storage
+    # 4) subir áudio bruto (opcional, mas útil p/ auditoria)
     audio_key = f"audios/patient_{patient.id}_exam_{exam.id}.ogg"
     audio_url = upload_bytes(audio_key, audio_bytes, content_type="audio/ogg")
     exam.audio_url = audio_url
     db.commit()
 
-    # processar (rodar seu modelo)
+    # 5) processar
     try:
-        metrics = process_audio_bytes(audio_bytes)
+        metrics = process_audio_bytes(audio_bytes)  # sua função retorna métricas
         pdf_bytes = build_pdf_bytes(patient.name, patient.cpf, metrics)
 
         pdf_key = f"reports/patient_{patient.id}_exam_{exam.id}.pdf"
         pdf_url = upload_bytes(pdf_key, pdf_bytes, content_type="application/pdf")
-        exam.pdf_url = pdf_url
+        # Se você tiver a coluna em ExamResult, salve lá. No MVP, guarde no próprio Exam:
+        # exam.result = ExamResult(summary=..., pdf_url=pdf_url)  # se tiver a tabela
         exam.status = "done"
+        # se quiser, crie fields pdf_url/summary em Exam (ou mantenha no ExamResult)
+        # por enquanto, vamos só enviar o PDF ao paciente:
         db.commit()
 
-        # enviar PDF ao paciente
         send_document(to_whatsapp=from_whatsapp, doc_url=pdf_url, caption="Seu resultado UroFlux")
-
-    except Exception as e:
+    except Exception:
         exam.status = "failed"
         db.commit()
         send_text(from_whatsapp, "Houve um problema ao processar seu exame. Tente novamente mais tarde.")
         raise
 
-# -------------------------
-# PÁGINAS HTML (médico)
-# -------------------------
-
-# Home -> redireciona para pacientes
+# =======================
+#   UI (médico)
+# =======================
 @app.get("/")
 def home():
     return RedirectResponse(url="/web/patients")
 
-# Lista de pacientes + busca
 @app.get("/web/patients")
 def web_patients(request: Request, q: str | None = None, db: Session = Depends(get_db)):
     qry = db.query(Patient)
@@ -221,15 +225,12 @@ def web_patients(request: Request, q: str | None = None, db: Session = Depends(g
         {"request": request, "patients": patients, "q": q or ""}
     )
 
-# Criar paciente (form GET/POST)
 @app.get("/web/patients/new")
 def web_new_patient(request: Request):
-    return templates.TemplateResponse("patient_detail.html", {
-        "request": request,
-        "patient": None,
-        "exams": [],
-        "creating": True
-    })
+    return templates.TemplateResponse(
+        "patient_detail.html",
+        {"request": request, "patient": None, "exams": [], "creating": True}
+    )
 
 @app.post("/web/patients/new")
 def web_create_patient(
@@ -239,39 +240,34 @@ def web_create_patient(
     whatsapp: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    # reuso do endpoint API
-    existing = db.query(Patient).filter(
-        (Patient.cpf == cpf) | (Patient.whatsapp == whatsapp)
-    ).first()
+    existing = (
+        db.query(Patient)
+          .filter((Patient.cpf == cpf) | (Patient.whatsapp == whatsapp))
+          .first()
+    )
     if existing:
-        # simples: volta com erro em querystring
         return RedirectResponse(url=f"/web/patients?error=duplicado", status_code=303)
 
     p = Patient(name=name, cpf=cpf, whatsapp=whatsapp)
     db.add(p); db.commit(); db.refresh(p)
     return RedirectResponse(url=f"/web/patients/{p.id}", status_code=303)
 
-# Detalhe do paciente + exames
 @app.get("/web/patients/{patient_id}")
 def web_patient_detail(request: Request, patient_id: int, db: Session = Depends(get_db)):
-    p = db.query(Patient).get(patient_id)
+    p = db.get(Patient, patient_id)
     if not p:
         return RedirectResponse(url="/web/patients", status_code=303)
     exams = db.query(Exam).filter(Exam.patient_id == patient_id).order_by(Exam.id.desc()).all()
-    return templates.TemplateResponse("patient_detail.html", {
-        "request": request,
-        "patient": p,
-        "exams": exams,
-        "creating": False
-    })
+    return templates.TemplateResponse(
+        "patient_detail.html",
+        {"request": request, "patient": p, "exams": exams, "creating": False}
+    )
 
-# Enviar instruções por WhatsApp (botão na UI)
 @app.post("/web/patients/{patient_id}/send-instructions")
 def web_send_instructions(patient_id: int, db: Session = Depends(get_db)):
-    p = db.query(Patient).get(patient_id)
+    p = db.get(Patient, patient_id)
     if not p:
         return RedirectResponse(url="/web/patients", status_code=303)
-    # usa a função já existente
     try:
         send_template_message(
             to_whatsapp=p.whatsapp,
@@ -282,11 +278,7 @@ def web_send_instructions(patient_id: int, db: Session = Depends(get_db)):
         pass
     return RedirectResponse(url=f"/web/patients/{patient_id}", status_code=303)
 
-# Lista de exames (opcional)
 @app.get("/web/exams")
 def web_exams(request: Request, db: Session = Depends(get_db)):
     exams = db.query(Exam).order_by(Exam.id.desc()).limit(200).all()
-    return templates.TemplateResponse("exams_list.html", {
-        "request": request,
-        "exams": exams
-})
+    return templates.TemplateResponse("exams_list.html", {"request": request, "exams": exams})
