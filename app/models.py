@@ -20,7 +20,7 @@ class Exam(Base):
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
     audio_url = Column(Text, nullable=True)
     status = Column(String(32), default="received", nullable=False)
-    meta_message_id = Column(String(128), nullable=True)  # <— NOVO (usado no webhook)
+    meta_message_id = Column(String(64), nullable=True)  # <--- ADICIONE ESTA LINHA
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     patient = relationship("Patient", back_populates="exams")
