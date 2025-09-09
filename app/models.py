@@ -18,20 +18,13 @@ class Exam(Base):
     __tablename__ = "exams"
     id = Column(Integer, primary_key=True, index=True)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
-    audio_url = Column(Text, nullable=True)
+
+    # novos campos para casar com o main.py
+    meta_message_id = Column(String(64), nullable=True)  # id da mensagem do WhatsApp
+    audio_url = Column(Text, nullable=True)              # onde guardamos o áudio
+    pdf_url = Column(Text, nullable=True)                # onde guardamos o PDF
+
     status = Column(String(32), default="received", nullable=False)
-    meta_message_id = Column(String(64), nullable=True)  # <--- ADICIONE ESTA LINHA
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     patient = relationship("Patient", back_populates="exams")
-    result = relationship("ExamResult", back_populates="exam", uselist=False)
-
-class ExamResult(Base):
-    __tablename__ = "exam_results"
-    id = Column(Integer, primary_key=True, index=True)
-    exam_id = Column(Integer, ForeignKey("exams.id"), unique=True, nullable=False)
-    summary = Column(Text, nullable=True)
-    pdf_url = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    exam = relationship("Exam", back_populates="result")
