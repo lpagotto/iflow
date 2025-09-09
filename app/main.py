@@ -10,7 +10,7 @@ from sqlalchemy import text
 from typing import Optional, List
 
 from .db import Base, engine, get_db
-from .models import Patient, Exam  # <- AQUI
+from .models import Patient, Exam, ExamResult
 from .schemas import PatientCreate, PatientOut, ExamOut
 from .settings import settings
 from .whatsapp import (
